@@ -1,0 +1,14 @@
+[Unit]
+Description=ssh-free connection monitor and auto-recovery
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=SSH_FREE_ROOT=/opt/ssh-free
+ExecStart=/usr/bin/python3 /opt/ssh-free/lib/monitor.py --daemon
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""Stop ssh-free session and restore networking."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _bootstrap import init
+
+init(__file__)
+
+from lib.cleanup import Cleanup
+from lib.config import load_config
+from lib.display import BOLD, RESET, banner, disconnected_banner
+from lib.lock import SessionLock
+
+
+def main():
+    banner("3.0")
+    print(f"{BOLD}Stopping session...{RESET}")
+    config = load_config()
+
+    # Restores server proxy, closes tunnel port, kills local ssh -R
+    Cleanup(config).run(full=True)
+    SessionLock().force_release()
+    disconnected_banner()
+    print("\033[32mAll tunnels stopped. Server and network restored.\033[0m")
+    print()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+"""
+ssh-free — SSH tunnel + TUN + tun2socks transparent proxy.
+
+Usage:
+    ssh-free user@host
+    ssh-free user@host:2222
+    ssh-free --status
+    ssh-free --recover   (internal)
+"""
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _bootstrap import init
+
+ROOT = init(__file__)
+
+from lib.cleanup import Cleanup
+from lib.config import ensure_config, load_config, resolve_server
+from lib.detector import Detector
+from lib.display import (
+    BOLD,
+    DIM,
+    RESET,
+    banner,
+    connected_summary,
+    fetch_public_ip,
+    measure_latency,
+    server_proxy_summary,
+    step_fail,
+    step_ok,
+    step_skip,
+)
+from lib.dns import DNSManager
+from lib.lock import SessionLock
+from lib.logger import log
+from lib.monitor import Monitor
+from lib.nat import NATManager
+from lib.profiles import apply_profile_overrides
+from lib.reverse_ssh import ReverseSSHTunnel
+from lib.routing import Router
+from lib.server_proxy import (
+    cleanup_remote_proxy,
+    open_interactive_shell,
+    setup_remote_proxy_system,
+    test_remote_download,
+)
+from lib.session import build_session, save_session
+from lib.ssh import SSHTunnel
+from lib.socks import Tun2Socks
+from lib.tun import TUNInterface
+from lib.utils import get_default_interface, internet_available, is_root
+
+
+VERSION = "3.0.0"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="SSH tunnel with TUN transparent proxy",
+    )
+    parser.add_argument(
+        "target",
+        nargs="?",
+        help="SSH target user@host[:port] or profile name",
+    )
+    parser.add_argument(
+        "--profile", "-p",
+        metavar="NAME",
+        help="Connect using named profile",
+    )
+    parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="Launch interactive TUI",
+    )
+    parser.add_argument(
+        "--profiles",
+        action="store_true",
+        help="List configured profiles",
+    )
+    parser.add_argument(
+        "--share-proxy",
+        action="store_true",
+        help="Share local v2rayN/proxy with remote server (default mode)",
+    )
+    parser.add_argument(
+        "--detach",
+        action="store_true",
+        help="Setup tunnel only, do not open SSH shell",
+    )
+    parser.add_argument(
+        "--client-tun",
+        action="store_true",
+        help="Route THIS machine through SSH server (TUN mode)",
+    )
+    parser.add_argument(
+        "--recover",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--no-monitor",
+        action="store_true",
+        help="Do not start background monitor",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force restart if already running",
+    )
+    parser.add_argument(
+        "-q", "--quiet",
+        action="store_true",
+        help="Minimal output",
+    )
+    return parser.parse_args()
+
+
+def require_root():
+    if not is_root():
+        print("\033[31mError:\033[0m ssh-free requires root (sudo).")
+        print("  sudo ssh-free user@host")
+        sys.exit(1)
+
+
+def run_detection(detector: Detector, quiet: bool, show_banner: bool = True) -> dict:
+    if not quiet and show_banner:
+        banner(VERSION)
+
+    checks = [
+        ("network", "Detecting network", detector.detect_network),
+        ("ssh", "Detecting SSH", detector.detect_ssh),
+        ("socks", "Detecting SOCKS5", detector.detect_socks_candidates),
+        ("v2rayn", "Detecting v2rayN", detector.detect_v2rayn),
+    ]
+
+    results = {}
+    for key, label, func in checks:
+        result = func()
+        results[key] = result
+        if not quiet:
+            if result.ok:
+                step_ok(label, result.message)
+            else:
+                step_skip(label, result.message)
+
+    return results
+
+
+def test_connectivity(quiet: bool) -> bool:
+    ok = internet_available()
+    if not quiet:
+        if ok:
+            step_ok("Testing connectivity")
+        else:
+            step_fail("Testing connectivity", "no response")
+    return ok
+
+
+def get_tunnel_mode(config, args) -> str:
+    if getattr(args, "client_tun", False):
+        return "client-tun"
+    if getattr(args, "share_proxy", False):
+        return "server-proxy"
+    return config.get("tunnel", {}).get("mode", "server-proxy")
+
+
+def resolve_local_socks(detector: Detector) -> tuple:
+    v2ray = detector.detect_v2rayn()
+    if v2ray.ok:
+        ep = v2ray.details["endpoint"]
+        return ep["host"], ep["port"], "v2rayn"
+
+    socks = detector.detect_socks_candidates()
+    if socks.ok:
+        ep = socks.details["selected"]
+        return ep["host"], ep["port"], "local"
+
+    raise RuntimeError(
+        "No local SOCKS proxy found. Start v2rayN or your proxy on 127.0.0.1:10808"
+    )
+
+
+def connect_server_proxy(args, config, server, detector, quiet: bool):
+    if not quiet:
+        step_ok("Detecting local proxy")
+
+    local_host, local_port, source = resolve_local_socks(detector)
+    if not quiet:
+        step_ok("Local SOCKS", f"{local_host}:{local_port} ({source})")
+        step_ok("Starting reverse SSH tunnel", f"{server['user']}@{server['host']}")
+
+    tunnel = ReverseSSHTunnel(config, server, local_host, local_port)
+    ssh_pid = tunnel.start_with_retry()
+    proxy_url = tunnel.get_proxy_url()
+
+    if not quiet:
+        step_ok("Tunnel ready", proxy_url)
+        step_ok("Auto-configuring server", "yum/dnf/apt + shell")
+
+    remote_files = setup_remote_proxy_system(config, server, proxy_url)
+
+    if not quiet:
+        step_ok("Testing server download")
+
+    remote_ip = test_remote_download(server, config, proxy_url)
+
+    session = build_session(
+        server=server,
+        ssh_pid=ssh_pid,
+        socks_source=source,
+        socks_port=local_port,
+        local_socks_port=local_port,
+        profile=server.get("name"),
+        tunnel_mode="server-proxy",
+        remote_proxy_url=proxy_url,
+    )
+    session["remote_files"] = remote_files
+    session["remote_port"] = tunnel.get_remote_port()
+    save_session(session)
+
+    if not args.no_monitor and config.get("monitor", {}).get("enabled", True):
+        Monitor(config).start_daemon()
+
+    if not quiet:
+        server_proxy_summary(
+            server=server,
+            local_socks=f"{local_host}:{local_port}",
+            remote_proxy_url=proxy_url,
+            remote_public_ip=remote_ip,
+            usage="",
+        )
+        print(f"{BOLD}Server uses your internet automatically.{RESET}")
+        print(f"{DIM}Try on server: apt update  |  curl https://google.com{RESET}")
+        print()
+
+    log.info(f"Server proxy active for {server['host']}")
+
+    auto_shell = config.get("reverse", {}).get("auto_shell", True)
+    if auto_shell and sys.stdin.isatty() and not getattr(args, "detach", False):
+        exit_code = open_interactive_shell(tunnel)
+        if not quiet:
+            print()
+            print(f"{DIM}Shell closed. Tunnel still active — run ssh-free-stop to disconnect.{RESET}")
+        sys.exit(exit_code)
+
+
+def connect_client_tun(args, config, server, detector, quiet: bool):
+    tun_check = detector.detect_tun_support()
+    t2s_check = detector.detect_tun2socks()
+
+    if not quiet:
+        if tun_check.ok:
+            step_ok("Creating TUN", "ready")
+        else:
+            step_fail("Creating TUN", tun_check.message)
+            sys.exit(1)
+
+        if not t2s_check.ok:
+            step_fail("Detecting tun2socks", t2s_check.message)
+            sys.exit(1)
+
+    physical_iface = detector.resolve_interface()
+
+    tunnel = SSHTunnel(config, server)
+    if not quiet:
+        step_ok("Starting SSH Tunnel", f"{server['user']}@{server['host']}")
+
+    ssh_pid = tunnel.start(background=True)
+    socks_port = tunnel.get_socks_port()
+
+    socks_host, socks_port_used, socks_source = detector.resolve_socks_endpoint(
+        socks_port
+    )
+
+    if socks_source == "ssh":
+        socks_host = "127.0.0.1"
+        socks_port_used = socks_port
+
+    tun = TUNInterface(config)
+    if not quiet:
+        step_ok("Creating TUN", tun.get_name())
+    tun.up()
+
+    if not quiet:
+        step_ok("Starting tun2socks")
+    t2s = Tun2Socks(config, tun.get_name(), socks_host, socks_port_used)
+    t2s_pid = t2s.start()
+
+    if not quiet:
+        step_ok("Configuring routing")
+    Router(config, tun.get_name(), server["host"]).setup()
+
+    if not quiet:
+        step_ok("Configuring DNS")
+    DNSManager(config).setup()
+
+    NATManager(config, tun.get_name(), physical_iface).setup()
+
+    session = build_session(
+        server=server,
+        tun_name=tun.get_name(),
+        socks_port=socks_port_used,
+        socks_source=socks_source,
+        ssh_pid=ssh_pid,
+        tun2socks_pid=t2s_pid,
+        physical_iface=physical_iface,
+        profile=server.get("name"),
+        routing_mode=config.get("routing", {}).get("mode", "full"),
+        tunnel_mode="client-tun",
+    )
+    save_session(session)
+
+    test_connectivity(quiet)
+
+    if not args.no_monitor and config.get("monitor", {}).get("enabled", True):
+        Monitor(config).start_daemon()
+
+    if not quiet:
+        connected_summary(
+            server=server,
+            public_ip=fetch_public_ip(),
+            latency_ms=measure_latency(),
+            socks_source=socks_source,
+        )
+
+    log.info(f"Connected via {server['host']}")
+
+
+def connect(args):
+    config = ensure_config(args.target)
+    server = resolve_server(config, args.target, getattr(args, "profile", None))
+
+    if not server or not server.get("host"):
+        print("\033[31mNo SSH server configured.\033[0m")
+        print("  ssh-free user@host")
+        sys.exit(1)
+
+    config = apply_profile_overrides(config, server)
+    tunnel_mode = get_tunnel_mode(config, args)
+
+    if tunnel_mode == "server-proxy" and is_root() and os.environ.get("SUDO_USER"):
+        if not args.quiet:
+            print(
+                f"{DIM}Tip: server-proxy works without sudo — "
+                f"ssh-free {server['user']}@{server['host']}{RESET}"
+            )
+
+    if tunnel_mode == "client-tun":
+        require_root()
+
+    lock = SessionLock()
+    if lock.is_locked() and not args.force and not args.recover:
+        print("\033[33mssh-free is already running.\033[0m")
+        print("  ssh-free-stop   — stop session")
+        print("  ssh-free --force user@host   — restart")
+        sys.exit(1)
+
+    if args.force:
+        Cleanup(load_config()).run()
+
+    if not lock.acquire() and not args.recover:
+        print("\033[31mCould not acquire lock.\033[0m")
+        sys.exit(1)
+
+    try:
+        if not args.quiet:
+            banner(VERSION)
+
+        detector = Detector(config)
+        run_detection(detector, args.quiet, show_banner=False)
+
+        if tunnel_mode == "server-proxy":
+            connect_server_proxy(args, config, server, detector, args.quiet)
+        else:
+            connect_client_tun(args, config, server, detector, args.quiet)
+
+    except Exception as e:
+        log.error(str(e))
+        if not args.quiet:
+            step_fail("Connection failed", str(e))
+        try:
+            cleanup_remote_proxy(config, server)
+        except Exception:
+            pass
+        Cleanup(load_config()).run()
+        sys.exit(1)
+
+
+def list_profiles_cmd():
+    from lib.profiles import list_profiles
+    config = load_config()
+    profiles = list_profiles(config)
+    banner(VERSION)
+    if not profiles:
+        print("No profiles configured. Run ssh-free --tui to add one.")
+        return
+    print(f"{BOLD}Profiles:{RESET}\n")
+    for p in profiles:
+        mark = " *" if p.get("default") else ""
+        print(f"  {p.get('name')}{mark}: {p.get('user','root')}@{p.get('host')}:{p.get('port',22)}")
+    print()
+
+
+def main():
+    args = parse_args()
+
+    if args.tui:
+        from lib.tui import TUI
+        TUI().main_menu()
+        return
+
+    if args.profiles:
+        list_profiles_cmd()
+        return
+
+    connect(args)
+
+
+if __name__ == "__main__":
+    main()

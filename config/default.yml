@@ -1,0 +1,100 @@
+app:
+  name: ssh-free
+  version: 3.0.0
+
+# tunnel.mode:
+#   server-proxy — share YOUR v2rayN/internet with the remote server (default)
+#   client-tun   — route THIS laptop through the remote server (TUN)
+tunnel:
+  mode: server-proxy
+
+reverse:
+  remote_port: 10809
+  remote_port_count: 100
+  remote_bind: 127.0.0.1
+  auto_setup: true
+  auto_shell: true
+
+network:
+  tun_name: ssh-free0
+  tun_address: 198.18.0.1
+  tun_prefix: 15
+  tun_interface: auto
+  mtu: 1500
+
+socks:
+  auto_detect: true
+  prefer_external: false
+  candidates:
+    - 127.0.0.1:10808
+    - 127.0.0.1:1080
+    - 127.0.0.1:2080
+    - 127.0.0.1:7890
+
+ssh:
+  user: root
+  port: 22
+  local_port: 0
+  reconnect: true
+  keepalive: 30
+  identity_file: ""   # e.g. ~/.ssh/id_ed25519 (uses sudo user's keys by default)
+  allow_password: true
+  extra_args: []
+  via_socks: false
+
+routing:
+  # full  — all traffic via tunnel
+  # split — only listed CIDRs via tunnel
+  # rules — include/exclude with domain support
+  mode: full
+  include: []
+  exclude:
+    - 192.168.0.0/16
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+  split: []
+
+dns:
+  enabled: true
+  mode: direct
+  servers:
+    - 1.1.1.1
+    - 8.8.8.8
+
+nat:
+  enabled: true
+
+monitor:
+  enabled: true
+  interval: 10
+  traffic: true
+
+tun2socks:
+  binary: ""
+  loglevel: warning
+
+logging:
+  level: INFO
+  file: logs/ssh-free.log
+
+default_server: default
+
+# Example profiles (override in config/user.yml):
+# servers:
+#   - name: home
+#     host: 203.0.113.10
+#     user: root
+#     port: 22
+#     routing:
+#       mode: full
+#   - name: dev
+#     host: 10.0.0.5
+#     user: admin
+#     routing:
+#       mode: rules
+#       include:
+#         - github.com
+#         - gitlab.com
+#         - 142.250.0.0/15
+
+servers: []

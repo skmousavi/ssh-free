@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Show current ssh-free session status."""
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _bootstrap import init
+
+init(__file__)
+
+from lib.config import load_config
+from lib.display import (
+    banner,
+    clear_screen,
+    connected_summary,
+    fetch_public_ip,
+    measure_latency,
+    status_display,
+    traffic_display,
+)
+from lib.lock import SessionLock
+from lib.monitor import Monitor
+from lib.paths import STATUS_FILE
+from lib.session import load_session
+from lib.traffic import TrafficStats
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="ssh-free session status")
+    parser.add_argument(
+        "--watch", "-w",
+        action="store_true",
+        help="Live refresh (traffic + health)",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=2,
+        help="Watch refresh interval in seconds",
+    )
+    return parser.parse_args()
+
+
+def show_status():
+    session = load_session()
+
+    if STATUS_FILE.exists():
+        try:
+            status = json.loads(STATUS_FILE.read_text())
+            status_display(status)
+            return status, session
+        except json.JSONDecodeError:
+            pass
+
+    if session:
+        monitor = Monitor(load_config())
+        health = monitor.check_health(session)
+        traffic = TrafficStats.from_session(session).snapshot_with_rates()
+        health["traffic"] = traffic
+        health["server"] = session.get("server")
+        health["profile"] = session.get("profile")
+        health["routing_mode"] = session.get("routing_mode")
+        status_display(health)
+        return health, session
+
+    return None, session
+
+
+def main():
+    args = parse_args()
+
+    if not SessionLock().is_locked() and not load_session():
+        banner("3.0")
+        print("\033[33mNo active session.\033[0m")
+        print("  ssh-free user@host")
+        sys.exit(0)
+
+    if args.watch:
+        try:
+            while True:
+                clear_screen()
+                status, session = show_status()
+                if session and not (status or {}).get("traffic"):
+                    traffic = TrafficStats.from_session(session).snapshot_with_rates()
+                    traffic_display(traffic)
+                print(f"\033[2mRefreshing every {args.interval}s — Ctrl+C to stop\033[0m")
+                time.sleep(args.interval)
+        except KeyboardInterrupt:
+            print()
+        return
+
+    status, session = show_status()
+
+    if session:
+        server = session.get("server", {})
+        connected_summary(
+            server=server,
+            public_ip=fetch_public_ip(),
+            latency_ms=measure_latency(),
+            socks_source=session.get("socks_source", "ssh"),
+        )
+
+
+if __name__ == "__main__":
+    main()

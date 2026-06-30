@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Runtime
+runtime/*
+!runtime/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# Config overrides (may contain secrets)
+config/user.yml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Test
+.pytest_cache/
+.coverage
+
+# Binaries
+bin/tun2socks
+bin/tun2socks-*

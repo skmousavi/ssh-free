@@ -1,0 +1,3 @@
+# System install uses: sudo apt install python3-yaml
+# For local venv development only:
+PyYAML>=6.0

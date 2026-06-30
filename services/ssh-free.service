@@ -1,0 +1,13 @@
+[Unit]
+Description=ssh-free transparent SSH tunnel
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=SSH_FREE_ROOT=/opt/ssh-free
+ExecStart=/usr/local/bin/ssh-free
+ExecStop=/usr/local/bin/ssh-free-stop
+
+[Install]
+WantedBy=multi-user.target

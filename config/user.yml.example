@@ -1,0 +1,23 @@
+# Copy to config/user.yml — this file is gitignored (may contain your servers).
+#
+#   cp config/user.yml.example config/user.yml
+
+default_server: home
+
+servers:
+  - name: home
+    host: YOUR_SERVER_IP
+    user: root
+    port: 22
+
+ssh:
+  identity_file: ~/.ssh/id_ed25519
+  keepalive: 30
+
+reverse:
+  remote_port: 10809
+  auto_setup: true
+  auto_shell: true
+
+tunnel:
+  mode: server-proxy

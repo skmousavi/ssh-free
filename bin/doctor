@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Diagnostics for ssh-free prerequisites."""
 
-import os
 import sys
 from pathlib import Path
 
@@ -13,6 +12,7 @@ init(__file__)
 from lib.config import load_config
 from lib.detector import Detector
 from lib.display import run_doctor_report
+from lib.platform import is_windows, name as platform_name, supports_client_tun
 from lib.routing_detect import detect_routing_backend
 from lib.utils import command_exists, internet_available, is_root
 
@@ -20,25 +20,93 @@ from lib.utils import command_exists, internet_available, is_root
 def main():
     config = load_config()
     detector = Detector(config)
+    mode = config.get("tunnel", {}).get("mode", "server-proxy")
 
     results = detector.detect_all()
-    results["root"] = type("R", (), {"ok": is_root(), "message": "running as root" if is_root() else "not root (sudo required)"})()
-    results["internet"] = type("R", (), {"ok": internet_available(), "message": "reachable" if internet_available() else "unreachable"})()
 
-    backend = detect_routing_backend()
-    routing_msg = (
-        f"{backend['backend']}, full={'yes' if backend['supports_full'] else 'no'}, "
-        f"policy={'yes' if backend['supports_policy'] else 'no'}"
-    )
-    results["routing"] = type(
+    if is_windows() or mode == "server-proxy":
+        results["root"] = type(
+            "R",
+            (),
+            {
+                "ok": True,
+                "message": "admin not required for server-proxy",
+            },
+        )()
+    else:
+        results["root"] = type(
+            "R",
+            (),
+            {
+                "ok": is_root(),
+                "message": "running as root" if is_root() else "not root (sudo required)",
+            },
+        )()
+
+    results["internet"] = type(
         "R",
         (),
-        {"ok": backend["supports_full"], "message": routing_msg},
+        {
+            "ok": internet_available(),
+            "message": "reachable" if internet_available() else "unreachable",
+        },
     )()
 
-    for tool in ("ip", "iptables", "curl", "ping"):
-        exists = command_exists(tool)
-        results[tool] = type("R", (), {"ok": exists, "message": "found" if exists else "missing"})()
+    results["platform"] = type(
+        "R",
+        (),
+        {"ok": True, "message": platform_name()},
+    )()
+
+    if is_windows():
+        for tool in ("curl", "ping"):
+            exists = command_exists(tool)
+            results[tool] = type(
+                "R",
+                (),
+                {"ok": exists, "message": "found" if exists else "missing"},
+            )()
+        ssh_ok = command_exists("ssh") or __import__("os").path.isfile(
+            __import__("os").path.join(
+                __import__("os").environ.get("WINDIR", r"C:\Windows"),
+                "System32",
+                "OpenSSH",
+                "ssh.exe",
+            )
+        )
+        results["ssh_client"] = type(
+            "R",
+            (),
+            {"ok": ssh_ok, "message": "OpenSSH client" if ssh_ok else "install OpenSSH Client"},
+        )()
+        try:
+            import yaml  # noqa: F401
+
+            results["python_yaml"] = type("R", (), {"ok": True, "message": "PyYAML OK"})()
+        except ImportError:
+            results["python_yaml"] = type(
+                "R",
+                (),
+                {"ok": False, "message": "pip install pyyaml"},
+            )()
+    else:
+        backend = detect_routing_backend()
+        routing_msg = (
+            f"{backend['backend']}, full={'yes' if backend['supports_full'] else 'no'}, "
+            f"policy={'yes' if backend['supports_policy'] else 'no'}"
+        )
+        results["routing"] = type(
+            "R",
+            (),
+            {"ok": backend["supports_full"] or mode == "server-proxy", "message": routing_msg},
+        )()
+        for tool in ("ip", "iptables", "curl", "ping"):
+            exists = command_exists(tool)
+            results[tool] = type(
+                "R",
+                (),
+                {"ok": exists or (tool in ("iptables", "ip") and mode == "server-proxy"), "message": "found" if exists else "missing"},
+            )()
 
     report = {}
     for key, val in results.items():
@@ -46,9 +114,17 @@ def main():
 
     run_doctor_report(report)
 
-    failed = [k for k, v in report.items() if not v["ok"] and k not in ("socks", "v2rayn", "internet")]
+    skip_fail = {"socks", "v2rayn", "internet", "tun2socks", "tun", "routing", "iptables", "ip"}
+    if is_windows():
+        skip_fail.update({"tun2socks", "tun", "routing", "iptables", "ip", "root"})
+
+    failed = [k for k, v in report.items() if not v["ok"] and k not in skip_fail]
     if failed:
         print(f"\033[33m{len(failed)} issue(s) need attention.\033[0m")
+        sys.exit(1)
+
+    if mode == "client-tun" and not supports_client_tun():
+        print("\033[33mclient-tun mode is Linux-only. Use default server-proxy on Windows.\033[0m")
         sys.exit(1)
 
     print("\033[32mSystem ready for ssh-free.\033[0m")

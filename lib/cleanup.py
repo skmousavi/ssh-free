@@ -3,10 +3,10 @@
 
 import json
 import os
-import signal
 from typing import Optional
 
 from lib.logger import log
+from lib.platform import kill_processes_matching, pid_alive, terminate_pid
 from lib.dns import DNSManager
 from lib.nat import NATManager
 from lib.paths import (
@@ -21,7 +21,6 @@ from lib.paths import (
 )
 from lib.routing import Router
 from lib.tun import TUNInterface
-from lib.utils import run_command
 
 
 class Cleanup:
@@ -35,8 +34,8 @@ class Cleanup:
 
         try:
             pid = int(MONITOR_PID_FILE.read_text().strip())
-            os.kill(pid, signal.SIGTERM)
-        except (ProcessLookupError, ValueError):
+            terminate_pid(pid)
+        except (ValueError, OSError):
             pass
         MONITOR_PID_FILE.unlink(missing_ok=True)
 
@@ -51,18 +50,17 @@ class Cleanup:
                 continue
             try:
                 pid = int(pid_file.read_text().strip())
-                os.kill(pid, signal.SIGTERM)
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, ValueError):
+                terminate_pid(pid)
+            except (ValueError, OSError):
                 pass
             pid_file.unlink(missing_ok=True)
 
-        run_command(["pkill", "-f", "tun2socks.*ssh-free"])
-        run_command(["pkill", "-f", "ssh.*-D.*127.0.0.1"])
+        kill_processes_matching("tun2socks.*ssh-free")
+        kill_processes_matching("ssh.*-D.*127.0.0.1")
         if server_host:
-            run_command(["pkill", "-f", f"ssh.*-R.*{server_host}"])
+            kill_processes_matching(f"ssh.*-R.*{server_host}")
         else:
-            run_command(["pkill", "-f", "ssh.*-R.*127.0.0.1"])
+            kill_processes_matching("ssh.*-R.*127.0.0.1")
 
     def restore_network(self):
         session = self._load_session()

@@ -1,25 +1,16 @@
 #!/usr/bin/env python3
-"""SSH environment when ssh-free runs under sudo."""
+"""SSH environment for Linux (sudo) and Windows."""
 
 import glob
 import os
-import pwd
+import sys
 from typing import List, Optional, Tuple
+
+from lib.platform import get_user_home, is_linux, is_windows, wrap_ssh_command
 
 
 def get_invoking_user() -> Tuple[str, str]:
-    """Return (username, home_dir) for SSH authentication."""
-    if os.geteuid() == 0 and os.environ.get("SUDO_USER"):
-        user = os.environ["SUDO_USER"]
-        try:
-            home = pwd.getpwnam(user).pw_dir
-        except KeyError:
-            home = f"/home/{user}"
-        return user, home
-
-    user = os.environ.get("USER") or os.environ.get("LOGNAME") or "root"
-    home = os.environ.get("HOME") or pwd.getpwnam(user).pw_dir
-    return user, home
+    return get_user_home()
 
 
 def resolve_ssh_auth_sock() -> Optional[str]:
@@ -27,14 +18,15 @@ def resolve_ssh_auth_sock() -> Optional[str]:
     if sock and os.path.exists(sock):
         return sock
 
-    uid = os.environ.get("SUDO_UID") or os.environ.get("UID")
-    if uid:
-        for path in (
-            f"/run/user/{uid}/keyring/ssh",
-            f"/run/user/{uid}/gcr/ssh",
-        ):
-            if os.path.exists(path):
-                return path
+    if is_linux():
+        uid = os.environ.get("SUDO_UID") or os.environ.get("UID")
+        if uid:
+            for path in (
+                f"/run/user/{uid}/keyring/ssh",
+                f"/run/user/{uid}/gcr/ssh",
+            ):
+                if os.path.exists(path):
+                    return path
 
     return None
 
@@ -72,12 +64,18 @@ def build_ssh_env() -> dict:
     env["HOME"] = home
     env["USER"] = user
     env["LOGNAME"] = user
+    if is_windows():
+        env["USERPROFILE"] = home
 
     sock = resolve_ssh_auth_sock()
     if sock:
         env["SSH_AUTH_SOCK"] = sock
 
     return env
+
+
+def wrap_local_ssh(cmd: list) -> list:
+    return wrap_ssh_command(cmd)
 
 
 def parse_ssh_error(stderr: bytes) -> str:
@@ -95,19 +93,24 @@ def parse_ssh_error(stderr: bytes) -> str:
 def permission_denied_hint() -> str:
     _, home = get_invoking_user()
     keys = discover_identity_files(home)
-    hint = (
-        f"SSH auth failed under sudo. Keys are loaded from {home}/.ssh/ "
-        f"(not /root/.ssh/)."
-    )
+    if is_windows():
+        hint = f"SSH auth failed. Keys are loaded from {home}\\.ssh\\"
+    elif is_linux() and os.environ.get("SUDO_USER"):
+        hint = (
+            f"SSH auth failed under sudo. Keys are loaded from {home}/.ssh/ "
+            f"(not /root/.ssh/)."
+        )
+    else:
+        hint = f"SSH auth failed. Keys are loaded from {home}/.ssh/"
     if not keys:
         hint += (
-            " No private keys found — run: ssh-copy-id user@host "
+            " No private keys found — copy your public key to the server "
             "or set ssh.identity_file in config/user.yml"
         )
     else:
         hint += f" Using: {', '.join(os.path.basename(k) for k in keys)}"
     sock = resolve_ssh_auth_sock()
-    if not sock:
+    if not sock and is_linux():
         hint += (
             ". If you use ssh-agent, try: "
             "sudo SSH_AUTH_SOCK=$SSH_AUTH_SOCK ssh-free user@host"

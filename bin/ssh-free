@@ -40,6 +40,7 @@ from lib.dns import DNSManager
 from lib.lock import SessionLock
 from lib.logger import log
 from lib.monitor import Monitor
+from lib.platform import enable_console_colors, is_windows, supports_client_tun
 from lib.nat import NATManager
 from lib.profiles import apply_profile_overrides
 from lib.reverse_ssh import ReverseSSHTunnel
@@ -353,6 +354,10 @@ def connect(args):
             )
 
     if tunnel_mode == "client-tun":
+        if not supports_client_tun():
+            print("\033[31mclient-tun mode is Linux-only.\033[0m")
+            print("  Use default mode on Windows: ssh-free user@host")
+            sys.exit(1)
         require_root()
 
     lock = SessionLock()
@@ -409,6 +414,7 @@ def list_profiles_cmd():
 
 
 def main():
+    enable_console_colors()
     args = parse_args()
 
     if args.tui:

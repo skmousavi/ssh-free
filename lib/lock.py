@@ -4,6 +4,7 @@
 import os
 import signal
 from lib.paths import LOCK_FILE
+from lib.platform import pid_alive
 
 
 class SessionLock:
@@ -25,9 +26,8 @@ class SessionLock:
 
         try:
             pid = int(LOCK_FILE.read_text().strip())
-            os.kill(pid, 0)
-            return True
-        except (ProcessLookupError, ValueError):
+            return pid_alive(pid)
+        except (ValueError, OSError):
             LOCK_FILE.unlink(missing_ok=True)
             return False
 

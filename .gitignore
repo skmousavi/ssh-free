@@ -23,6 +23,9 @@ config/user.yml
 .pytest_cache/
 .coverage
 
-# Binaries
+# Binaries (Linux install)
 bin/tun2socks
 bin/tun2socks-*
+
+# Windows launchers (generated on install)
+launchers/

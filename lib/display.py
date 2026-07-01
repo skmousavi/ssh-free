@@ -106,15 +106,31 @@ def clear_screen():
 
 
 def measure_latency(host: str = "1.1.1.1", count: int = 3) -> Optional[float]:
-    code, out, _ = run_command(
-        ["ping", "-c", str(count), "-W", "2", host],
-        timeout=15,
-    )
+    import sys
+
+    if sys.platform == "win32":
+        code, out, _ = run_command(
+            ["ping", "-n", str(count), "-w", "2000", host],
+            timeout=15,
+        )
+    else:
+        code, out, _ = run_command(
+            ["ping", "-c", str(count), "-W", "2", host],
+            timeout=15,
+        )
     if code != 0:
         return None
 
     for line in out.splitlines():
-        if "avg" in line or "rtt" in line:
+        lower = line.lower()
+        if "average" in lower and "ms" in lower:
+            for token in line.replace("=", " ").replace(",", " ").split():
+                if token.lower().endswith("ms"):
+                    try:
+                        return float(token.lower().replace("ms", ""))
+                    except ValueError:
+                        pass
+        if "avg" in lower or "rtt" in lower:
             parts = line.split("=")
             if len(parts) >= 2:
                 values = parts[1].strip().split("/")

@@ -20,7 +20,8 @@ REMOTE_FILES = [
 
 
 def _ssh_base_cmd(server: Dict, config: Dict) -> list:
-    import os
+    from lib.platform import ssh_executable
+    from lib.ssh_context import discover_identity_files, get_invoking_user, wrap_local_ssh
 
     user = server.get("user", "root")
     host = server["host"]
@@ -31,7 +32,7 @@ def _ssh_base_cmd(server: Dict, config: Dict) -> list:
     )
 
     cmd = [
-        "ssh",
+        ssh_executable(),
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=15",
         "-o", "StrictHostKeyChecking=accept-new",
@@ -41,17 +42,7 @@ def _ssh_base_cmd(server: Dict, config: Dict) -> list:
     for key in identity_files:
         cmd.extend(["-i", key])
     cmd.append(f"{user}@{host}")
-
-    sudo_user = os.environ.get("SUDO_USER") if os.geteuid() == 0 else None
-    if sudo_user:
-        env = build_ssh_env()
-        return [
-            "sudo", "-u", sudo_user,
-            "-E", "env",
-            f"HOME={env.get('HOME', home)}",
-            f"SSH_AUTH_SOCK={env.get('SSH_AUTH_SOCK', '')}",
-        ] + cmd
-    return cmd
+    return wrap_local_ssh(cmd)
 
 
 def setup_remote_proxy_system(

@@ -62,6 +62,11 @@ def which(command: str) -> Optional[str]:
 
 def find_tun2socks(config: Optional[dict] = None) -> Optional[str]:
     """Locate tun2socks binary (PATH, install dir, config override)."""
+    import sys
+
+    if sys.platform == "win32":
+        return None
+
     from lib.paths import BIN_DIR, TUN2SOCKS_BIN
 
     if config:
@@ -81,8 +86,8 @@ def find_tun2socks(config: Optional[dict] = None) -> Optional[str]:
     return None
 
 def is_root() -> bool:
-
-    return os.geteuid() == 0
+    from lib.platform import is_elevated
+    return is_elevated()
 
 def file_exists(path: str) -> bool:
 
@@ -168,44 +173,13 @@ def run_json(command: List[str]):
     
 
 def get_default_interface():
+    from lib.platform import get_default_interface as _iface
+    return _iface()
 
-    data = run_json(
-        [
-            "ip",
-            "-j",
-            "route",
-            "show",
-            "default",
-        ]
-    )
-
-    if not data:
-
-        return None
-
-    return data[0]["dev"]
 
 def get_default_gateway():
-
-    data = run_json(
-        [
-            "ip",
-            "-j",
-            "route",
-            "show",
-            "default",
-        ]
-    )
-
-    if not data:
-        return None
-
-    for route in data:
-        gw = route.get("gateway")
-        if gw:
-            return gw
-
-    return None
+    from lib.platform import get_default_gateway as _gw
+    return _gw()
 
 
 def get_ip(interface):

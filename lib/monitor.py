@@ -3,13 +3,14 @@
 
 import json
 import os
-import signal
+import subprocess
 import sys
 import time
 from typing import Dict, Optional
 
 from lib.logger import log
 from lib.paths import MONITOR_PID_FILE, ROOT, RUNTIME_DIR, SESSION_FILE, STATUS_FILE
+from lib.platform import is_windows, pid_alive, start_detached
 from lib.utils import internet_available, is_port_open, now, run_command
 from lib.traffic import TrafficStats
 
@@ -150,14 +151,12 @@ class Monitor:
     def _pid_alive(pid: Optional[int]) -> bool:
         if not pid:
             return False
-        try:
-            os.kill(int(pid), 0)
-            return True
-        except (ProcessLookupError, ValueError):
-            return False
+        return pid_alive(int(pid))
 
     @staticmethod
     def _interface_up(name: str) -> bool:
+        if is_windows():
+            return False
         code, out, _ = run_command(["ip", "link", "show", name])
         return code == 0 and "UP" in out
 
@@ -165,30 +164,33 @@ class Monitor:
         if MONITOR_PID_FILE.exists():
             try:
                 pid = int(MONITOR_PID_FILE.read_text().strip())
-                os.kill(pid, 0)
-                log.debug("Monitor already running")
-                return pid
-            except (ProcessLookupError, ValueError):
-                MONITOR_PID_FILE.unlink(missing_ok=True)
-
-        pid = os.fork()
-        if pid > 0:
-            MONITOR_PID_FILE.write_text(str(pid))
-            return pid
-
-        os.setsid()
-        sys.stdin = open(os.devnull)
-        sys.stdout = open(os.devnull, "w")
-        sys.stderr = open(os.devnull, "w")
-
-        try:
-            self.run_loop()
-        except KeyboardInterrupt:
-            pass
-        finally:
+                if pid_alive(pid):
+                    log.debug("Monitor already running")
+                    return pid
+            except (ValueError, OSError):
+                pass
             MONITOR_PID_FILE.unlink(missing_ok=True)
 
-        sys.exit(0)
+        env = os.environ.copy()
+        env.setdefault("SSH_FREE_ROOT", str(ROOT))
+        args = [sys.executable, str(ROOT / "lib" / "monitor.py"), "--daemon"]
+
+        if is_windows():
+            pid = start_detached(args, env, cwd=str(ROOT))
+        else:
+            proc = subprocess.Popen(
+                args,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                cwd=str(ROOT),
+                start_new_session=True,
+            )
+            pid = proc.pid
+
+        MONITOR_PID_FILE.write_text(str(pid))
+        return pid
 
 
 if __name__ == "__main__":

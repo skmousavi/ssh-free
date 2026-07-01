@@ -43,13 +43,36 @@ sudo ssh-free-stop
 
 ## Install
 
+### Linux
+
 ```bash
 git clone https://github.com/YOUR_USERNAME/ssh-free.git
 cd ssh-free
 sudo ./install.sh
 ```
 
-Or via Makefile:
+### Windows (server-proxy — share v2rayN with Linux server)
+
+**Requirements:** Python 3.8+, [OpenSSH Client](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse), v2rayN
+
+```powershell
+git clone https://github.com/YOUR_USERNAME/ssh-free.git
+cd ssh-free
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Restart terminal, then:
+
+```powershell
+ssh-free root@YOUR_SERVER
+ssh-free-stop
+doctor
+```
+
+> **Note:** `client-tun` (route all PC traffic through server) is **Linux only**.  
+> On Windows, default **server-proxy** mode shares your internet with the remote Linux server.
+
+Or via Makefile (Linux):
 
 ```bash
 make install
@@ -75,7 +98,7 @@ Laptop v2rayN :10808  ←──SSH -R──  Server :10809 (SOCKS)
 After connect, **you are dropped into the server shell** — `apt update`, `curl`, and downloads work automatically.
 
 ```bash
-# v2rayN must be running first
+# v2rayN must be running first (Windows or Linux)
 ssh-free root@YOUR_SERVER
 # → opens SSH on server, proxy already active
 ```
@@ -83,20 +106,20 @@ ssh-free root@YOUR_SERVER
 Background only (no shell): `ssh-free --detach root@host`  
 Stop tunnel: `ssh-free-stop`
 
-### Connect
+### Connect (Linux client-tun — optional)
 
 ```bash
-sudo ssh-free root@YOUR_SERVER
+sudo ssh-free --client-tun root@YOUR_SERVER
 ```
 
 First run without config opens an **interactive wizard**.
 
-**SSH keys under sudo:** `ssh-free` uses **your user's** `~/.ssh/` keys (not root's), even when run with `sudo`. If auth fails:
+**SSH keys under sudo (Linux):** `ssh-free` uses **your user's** `~/.ssh/` keys (not root's), even when run with `sudo`.
+
+**Windows:** keys are in `%USERPROFILE%\.ssh\` — run as normal user (no admin).
 
 ```bash
 ssh-copy-id root@YOUR_SERVER    # once, as normal user
-# or with ssh-agent:
-sudo SSH_AUTH_SOCK=$SSH_AUTH_SOCK ssh-free root@YOUR_SERVER
 ```
 
 Set a specific key in `config/user.yml`:
@@ -109,10 +132,11 @@ ssh:
 ### Stop
 
 ```bash
-sudo ssh-free-stop
+ssh-free-stop          # Linux or Windows
+sudo ssh-free-stop     # Linux if installed system-wide
 ```
 
-### Interactive TUI
+### Interactive TUI (Linux)
 
 ```bash
 sudo ssh-free --tui
@@ -123,19 +147,19 @@ sudo tui
 ### Profiles
 
 ```bash
-sudo ssh-free --profiles
-sudo ssh-free --profile home
-sudo ssh-free home          # shorthand if profile exists
+ssh-free --profiles
+ssh-free --profile home
+ssh-free home          # shorthand if profile exists
 ```
 
-### Live traffic
+### Live traffic (Linux client-tun)
 
 ```bash
 sudo status --watch
 sudo status --watch --interval 1
 ```
 
-### Rule-based routing
+### Rule-based routing (Linux client-tun)
 
 Edit `config/user.yml`:
 
@@ -155,14 +179,14 @@ Modes: `full` | `split` | `rules`
 ### Diagnostics
 
 ```bash
-sudo doctor
-sudo status
+doctor
+status
 ```
 
 ### Force restart
 
 ```bash
-sudo ssh-free --force root@YOUR_SERVER
+ssh-free --force root@YOUR_SERVER
 ```
 
 ---

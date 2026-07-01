@@ -2,7 +2,6 @@
 """SSH reverse tunnel — share local SOCKS proxy with remote server."""
 
 import os
-import signal
 import subprocess
 import tempfile
 import time
@@ -10,6 +9,14 @@ from typing import Dict, List, Optional
 
 from lib.logger import log
 from lib.paths import RUNTIME_DIR, SSH_PID_FILE
+from lib.platform import (
+    find_pid_by_pattern,
+    is_linux,
+    kill_processes_matching,
+    pid_alive,
+    ssh_executable,
+    terminate_pid,
+)
 from lib.remote_lifecycle import (
     discover_free_remote_ports,
     prepare_remote_connect,
@@ -22,6 +29,7 @@ from lib.ssh_context import (
     get_invoking_user,
     parse_ssh_error,
     permission_denied_hint,
+    wrap_local_ssh,
 )
 from lib.utils import is_port_open, run_command
 
@@ -48,7 +56,11 @@ class ReverseSSHTunnel:
         self.identity_file = ssh_cfg.get("identity_file") or None
         self.extra_args = ssh_cfg.get("extra_args", [])
         _, self.ssh_home = get_invoking_user()
-        self.sudo_user = os.environ.get("SUDO_USER") if os.geteuid() == 0 else None
+        self.sudo_user = (
+            os.environ.get("SUDO_USER")
+            if is_linux() and os.environ.get("SUDO_USER")
+            else None
+        )
         self.identity_files = discover_identity_files(self.ssh_home, self.identity_file)
 
         rev_cfg = config.get("reverse", {}) or config.get("tunnel", {}).get("reverse", {})
@@ -72,7 +84,7 @@ class ReverseSSHTunnel:
         )
 
         cmd = [
-            "ssh",
+            ssh_executable(),
             "-N",
             "-R", forward,
             "-o", "ExitOnForwardFailure=yes",
@@ -94,26 +106,21 @@ class ReverseSSHTunnel:
             cmd.append(str(arg))
 
         cmd.extend(["-p", str(port), f"{user}@{host}"])
+        return wrap_local_ssh(cmd)
 
-        # When started via sudo, run SSH as the real user so -R reaches v2rayN
-        if self.sudo_user:
-            env = build_ssh_env()
-            return [
-                "sudo", "-u", self.sudo_user,
-                "-E", "env",
-                f"HOME={env.get('HOME', self.ssh_home)}",
-                f"USER={self.sudo_user}",
-                f"SSH_AUTH_SOCK={env.get('SSH_AUTH_SOCK', '')}",
-            ] + cmd
-
-        return cmd
+    def _ssh_bin_index(self, cmd: list) -> int:
+        for i, part in enumerate(cmd):
+            base = os.path.basename(str(part)).lower()
+            if base in ("ssh", "ssh.exe"):
+                return i
+        return 1
 
     def _ssh_run(self, remote_cmd: str, timeout: int = 25) -> tuple:
         user = self.server.get("user", "root")
         host = self.server["host"]
         port = self.server.get("port", 22)
         cmd = [
-            "ssh",
+            ssh_executable(),
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=10",
             "-o", "StrictHostKeyChecking=accept-new",
@@ -123,18 +130,7 @@ class ReverseSSHTunnel:
         for key in self.identity_files:
             cmd.extend(["-i", key])
         cmd.extend([f"{user}@{host}", remote_cmd])
-
-        if self.sudo_user:
-            env = build_ssh_env()
-            wrapper = [
-                "sudo", "-u", self.sudo_user,
-                "-E", "env",
-                f"HOME={env.get('HOME', self.ssh_home)}",
-                f"SSH_AUTH_SOCK={env.get('SSH_AUTH_SOCK', '')}",
-            ] + cmd
-            return run_command(wrapper, timeout=timeout)
-
-        return run_command(cmd, timeout=timeout)
+        return run_command(wrap_local_ssh(cmd), timeout=timeout)
 
     def _remote_port_in_use_script(self, port: int) -> str:
         return (
@@ -173,12 +169,8 @@ class ReverseSSHTunnel:
 
         cmd = self.build_command(background=background)
         if background:
-            # insert -f after ssh [sudo wrapper...]
-            if self.sudo_user:
-                idx = cmd.index("ssh")
-                cmd.insert(idx + 1, "-f")
-            else:
-                cmd.insert(1, "-f")
+            idx = self._ssh_bin_index(cmd)
+            cmd.insert(idx + 1, "-f")
 
         if not quiet_retry:
             log.info(
@@ -321,20 +313,13 @@ class ReverseSSHTunnel:
         if SSH_PID_FILE.exists():
             try:
                 pid = int(SSH_PID_FILE.read_text().strip())
-                os.kill(pid, signal.SIGTERM)
-                time.sleep(0.3)
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            except (ProcessLookupError, ValueError):
+                terminate_pid(pid)
+            except (ValueError, OSError):
                 pass
             SSH_PID_FILE.unlink(missing_ok=True)
 
         host = self.server["host"]
-        run_command(["pkill", "-f", f"ssh.*-R.*{host}"])
-        if self.sudo_user:
-            run_command(["pkill", "-u", self.sudo_user, "-f", f"ssh.*-R.*{host}"])
+        kill_processes_matching(f"ssh.*-R.*{host}")
 
         if release_remote:
             teardown_remote_session(
@@ -347,25 +332,10 @@ class ReverseSSHTunnel:
 
     def _find_ssh_pid(self) -> Optional[int]:
         host = self.server["host"]
-        patterns = [
-            f"ssh.*-R.*{host}",
-            f"ssh.*{host}",
-        ]
-        for pattern in patterns:
-            code, out, _ = run_command(["pgrep", "-f", pattern])
-            if code == 0 and out:
-                for line in out.splitlines():
-                    try:
-                        return int(line.strip())
-                    except ValueError:
-                        continue
-        if self.sudo_user:
-            code, out, _ = run_command(
-                ["pgrep", "-u", self.sudo_user, "-f", f"ssh.*{host}"]
-            )
-            if code == 0 and out:
-                return int(out.splitlines()[0])
-        return None
+        pid = find_pid_by_pattern(f"ssh.*-R.*{host}")
+        if pid:
+            return pid
+        return find_pid_by_pattern(host)
 
     def get_remote_port(self) -> int:
         return self.remote_port
@@ -381,7 +351,7 @@ class ReverseSSHTunnel:
         port_num = self.remote_port
 
         cmd = [
-            "ssh",
+            ssh_executable(),
             "-t",
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", f"ServerAliveInterval={self.keepalive}",

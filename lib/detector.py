@@ -30,7 +30,10 @@ class DetectionResult:
 class Detector:
 
     V2RAY_PORTS = [10808, 1080, 2080, 7890, 10809]
-    V2RAY_PROCESSES = ["v2ray", "xray", "v2raya", "sing-box", "clash"]
+    V2RAY_PROCESSES = [
+        "v2ray", "xray", "v2raya", "sing-box", "clash",
+        "v2rayn", "clash-verge", "nekoray",
+    ]
 
     def __init__(self, config: Dict):
         self.config = config
@@ -116,19 +119,19 @@ class Detector:
         return None
 
     def _find_proxy_process(self) -> Optional[str]:
-        code, out, _ = run_command(["ps", "aux"])
-        if code != 0:
-            return None
+        from lib.platform import find_process_in_list
 
-        for line in out.splitlines():
-            lower = line.lower()
-            for name in self.V2RAY_PROCESSES:
-                if name in lower and "grep" not in lower:
-                    return name
-        return None
+        return find_process_in_list(self.V2RAY_PROCESSES)
 
     def detect_tun2socks(self) -> DetectionResult:
+        from lib.platform import is_windows
         from lib.utils import find_tun2socks
+
+        if is_windows():
+            return DetectionResult(
+                False,
+                "client-tun not supported on Windows (use server-proxy mode)",
+            )
 
         path = find_tun2socks(self.config)
         if path:
@@ -140,6 +143,14 @@ class Detector:
         )
 
     def detect_tun_support(self) -> DetectionResult:
+        from lib.platform import is_windows
+
+        if is_windows():
+            return DetectionResult(
+                False,
+                "TUN mode is Linux-only (server-proxy works on Windows)",
+            )
+
         code, _, err = run_command(["ip", "tuntap", "add", "mode", "tun", "name", "ssh-free-test"])
         if code == 0:
             run_command(["ip", "tuntap", "del", "mode", "tun", "name", "ssh-free-test"])

@@ -302,7 +302,9 @@ def _write_launchers(install_dir: Path, py_exe: str) -> Path:
 
 def install_full(repo_root: Path) -> Path:
     """Full install like install.sh — deps, copy files, PATH, verify."""
-    repo_root = repo_root.resolve()
+    # CMD quirk: "%~dp0" ends with \ which escapes the closing quote (path gets a ")
+    raw = str(repo_root).strip().strip('"').rstrip("\\/")
+    repo_root = Path(raw).resolve()
     if not (repo_root / "bin" / "ssh-free").is_file():
         _fail(f"Invalid repo: {repo_root} (bin\\ssh-free not found)")
 

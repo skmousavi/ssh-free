@@ -5,7 +5,7 @@ import subprocess
 from typing import Dict, List, Optional
 
 from lib.logger import log
-from lib.ssh_context import build_ssh_env, discover_identity_files, get_invoking_user
+from lib.ssh_context import build_ssh_env, discover_identity_files, get_invoking_user, run_remote_bash
 from lib.utils import run_command
 
 MARKER = "# ssh-free-proxy"
@@ -108,14 +108,7 @@ echo OK
 """
 
     cmd = _ssh_base_cmd(server, config) + ["bash", "-s"]
-    result = subprocess.run(
-        cmd,
-        input=script,
-        capture_output=True,
-        text=True,
-        env=build_ssh_env(),
-        timeout=60,
-    )
+    result = run_remote_bash(cmd, script, build_ssh_env(), 60)
 
     if result.returncode != 0:
         raise RuntimeError(

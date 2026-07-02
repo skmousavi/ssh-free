@@ -78,6 +78,32 @@ def wrap_local_ssh(cmd: list) -> list:
     return wrap_ssh_command(cmd)
 
 
+def run_remote_bash(cmd: list, script: str, env: dict, timeout: int):
+    """Pipe a bash script to a remote shell without CRLF corruption.
+
+    On Windows, text-mode stdin translates '\\n' to '\\r\\n', which breaks
+    bash on the server. We normalize to LF and send raw bytes, then decode
+    stdout/stderr back to str so callers get a normal CompletedProcess.
+    """
+    import subprocess
+
+    normalized = script.replace("\r\n", "\n").replace("\r", "\n")
+    proc = subprocess.run(
+        cmd,
+        input=normalized.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        timeout=timeout,
+    )
+    return subprocess.CompletedProcess(
+        proc.args,
+        proc.returncode,
+        stdout=(proc.stdout or b"").decode("utf-8", "replace"),
+        stderr=(proc.stderr or b"").decode("utf-8", "replace"),
+    )
+
+
 def parse_ssh_error(stderr: bytes) -> str:
     text = stderr.decode(errors="replace").strip()
     lines = [

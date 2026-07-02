@@ -40,19 +40,31 @@ def terminate_pid(pid: int) -> None:
 
 
 def kill_processes_matching(pattern: str) -> None:
+    extra = ""
     if "tun2socks" in pattern:
+        name_cond = "$_.Name -like '*tun2socks*'"
         needle = "tun2socks"
     elif "-R" in pattern:
+        name_cond = "$_.Name -eq 'ssh.exe'"
         needle = pattern.split("-R")[-1].lstrip(".*")
+        extra = " -and $_.CommandLine -like '*-R*'"
     elif "-D" in pattern:
+        name_cond = "$_.Name -eq 'ssh.exe'"
         needle = "127.0.0.1"
+        extra = " -and $_.CommandLine -like '*-D*'"
     else:
+        name_cond = "$_.Name -eq 'ssh.exe'"
         needle = pattern
 
+    # Only kill the actual ssh/tun2socks child processes, never ourselves.
+    # (The needle can be a host/IP that also appears in this launcher's own
+    # command line, so a name filter + PID guard is essential.)
     ps_script = (
         f"$n='{needle}'; "
         "Get-CimInstance Win32_Process | "
-        "Where-Object { $_.CommandLine -and $_.CommandLine -like \"*$n*\" } | "
+        "Where-Object { "
+        f"{name_cond} -and $_.ProcessId -ne $PID -and "
+        f"$_.CommandLine -and $_.CommandLine -like \"*$n*\"{extra} }} | "
         "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
     )
     run_command(["powershell", "-NoProfile", "-Command", ps_script], timeout=20)

@@ -1,5 +1,6 @@
-# ssh-free Windows installer
+# ssh-free Windows installer (like install.sh on Linux)
 # Usage: powershell -ExecutionPolicy Bypass -File .\install.ps1
+#    or: install.bat
 
 $ErrorActionPreference = "Stop"
 
@@ -23,32 +24,35 @@ function Find-Python {
     return $null
 }
 
+function Invoke-Python($PyCmd, $Arguments) {
+    $all = @()
+    $all += $PyCmd
+    $all += $Arguments
+    & $all[0] $all[1..($all.Length - 1)]
+    if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+        throw "Command failed: $($all -join ' ') (exit $LASTEXITCODE)"
+    }
+}
+
 try {
     Info "Installing ssh-free v$Version for Windows"
     Info "Source: $RepoRoot"
 
     if (-not (Test-Path (Join-Path $RepoRoot "bin\ssh-free"))) {
-        Fail "Run install.ps1 from the ssh-free project folder (bin\ssh-free not found)"
+        Fail "Run install.ps1 from the ssh-free project folder"
     }
 
     $pyCmd = Find-Python
-    if (-not $pyCmd) { Fail "Python 3 not found. Install from https://python.org (check Add to PATH)" }
-
-    & $pyCmd[0] $pyCmd[1..($pyCmd.Length-1)] -c "import yaml" 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        Info "Installing PyYAML..."
-        & $pyCmd[0] $pyCmd[1..($pyCmd.Length-1)] -m pip install --user pyyaml
-        & $pyCmd[0] $pyCmd[1..($pyCmd.Length-1)] -c "import yaml" 2>$null
-        if ($LASTEXITCODE -ne 0) { Fail "PyYAML required: pip install pyyaml" }
-    }
-    Info "Python dependency OK (yaml)"
-
-    $sshExe = Join-Path $env:WINDIR "System32\OpenSSH\ssh.exe"
-    if (-not (Test-Path $sshExe)) {
-        Warn "OpenSSH client not found."
-        Warn "Settings -> Apps -> Optional features -> Add OpenSSH Client"
+    if (-not $pyCmd) {
+        Fail "Python 3 not found. Install from https://python.org (check Add to PATH)"
     }
 
+    # Step 1: prerequisites (Python, pip, PyYAML, OpenSSH) — like install.sh apt deps
+    Info "Checking and installing prerequisites..."
+    $setupScript = Join-Path $RepoRoot "lib\windows_setup.py"
+    Invoke-Python $pyCmd @($setupScript, "--ensure-deps")
+
+    # Step 2: copy files
     Info "Copying files to $InstallDir"
     if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir }
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
@@ -63,6 +67,7 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir "logs") | Out-Null
     New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir "runtime") | Out-Null
 
+    # Step 3: PATH launchers (always run prereq first)
     $LauncherDir = Join-Path $InstallDir "launchers"
     New-Item -ItemType Directory -Force -Path $LauncherDir | Out-Null
 
@@ -74,10 +79,15 @@ try {
 @echo off
 setlocal
 set "SSH_FREE_ROOT=$InstallDir"
+call "$InstallDir\win-prereq.bat" || exit /b 1
 $pyLine "$pyScript" %*
 "@ | Set-Content -Path (Join-Path $LauncherDir "$name.cmd") -Encoding ASCII
     }
 
+    # Copy win-prereq to install dir
+    Copy-Item (Join-Path $RepoRoot "win-prereq.bat") (Join-Path $InstallDir "win-prereq.bat") -Force
+
+    # Step 4: user PATH
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     if (-not $userPath) { $userPath = "" }
     if ($userPath -notlike "*$LauncherDir*") {
@@ -89,17 +99,19 @@ $pyLine "$pyScript" %*
     }
 
     [Environment]::SetEnvironmentVariable("SSH_FREE_ROOT", $InstallDir, "User")
-
-    # Refresh PATH in this window
     $env:Path = "$env:Path;$LauncherDir"
     $env:SSH_FREE_ROOT = $InstallDir
 
+    # Step 5: verify (like doctor at end of install)
+    Info "Verifying installation..."
+    Invoke-Python $pyCmd @($setupScript, "--verify", $InstallDir)
+
     Info "Installation complete!"
     Write-Host ""
-    Write-Host "  Close and reopen CMD/PowerShell, then run:"
+    Write-Host "  Close and reopen CMD, then:"
     Write-Host "    ssh-free administrator@192.168.0.9"
     Write-Host ""
-    Write-Host "  Or run now from this folder (no install):"
+    Write-Host "  Or from this folder now:"
     Write-Host "    .\ssh-free.bat administrator@192.168.0.9"
     Write-Host ""
     Write-Host "  v2rayN must be running (127.0.0.1:10808)"

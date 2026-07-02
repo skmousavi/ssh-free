@@ -4,11 +4,10 @@ cd /d "%~dp0"
 set "SSH_FREE_ROOT=%~dp0"
 if "%SSH_FREE_ROOT:~-1%"=="\" set "SSH_FREE_ROOT=%SSH_FREE_ROOT:~0,-1%"
 
-where python >nul 2>&1 && set "PY=python" && goto :run
-where py >nul 2>&1 && set "PY=py -3" && goto :run
+call "%~dp0win-prereq.bat" || exit /b 1
 
-echo [ERROR] Python not found.
-exit /b 1
+where python >nul 2>&1 && set "PY=python" && goto :run
+set "PY=py -3"
 
 :run
 %PY% "%SSH_FREE_ROOT%\bin\doctor" %*

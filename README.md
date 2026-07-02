@@ -53,25 +53,37 @@ sudo ./install.sh
 
 ### Windows (server-proxy — share v2rayN with Linux server)
 
-**Requirements:** Python 3.8+, [OpenSSH Client](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse), v2rayN
-
-```powershell
-git clone https://github.com/YOUR_USERNAME/ssh-free.git
-cd ssh-free
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-Restart terminal, then:
-
-```powershell
-ssh-free administrator@192.168.0.9
-```
-
-**Or run immediately without install** (from project folder):
+**One command installs everything** (like `sudo ./install.sh` on Linux):
 
 ```cmd
 cd Desktop\ssh-free
-ssh-free.bat administrator@192.168.0.9
+install.bat
+```
+
+Or PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The installer will:
+1. Check Python 3.8+
+2. Install **pip** and **PyYAML** if missing
+3. Install **OpenSSH Client** if missing (may ask for Administrator)
+4. Copy files to `%LOCALAPPDATA%\ssh-free`
+5. Add commands to PATH
+6. Run **doctor** to verify
+
+After install, **close and reopen CMD**, then:
+
+```cmd
+ssh-free administrator@YOUR_SERVER
+```
+
+**Run without full install** (from project folder — auto-installs deps each time):
+
+```cmd
+ssh-free.bat administrator@YOUR_SERVER
 ```
 
 > **Note:** `client-tun` (route all PC traffic through server) is **Linux only**.  

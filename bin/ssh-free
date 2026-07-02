@@ -54,6 +54,7 @@ from lib.server_proxy import (
 from lib.session import build_session, save_session
 from lib.ssh import SSHTunnel
 from lib.ssh_auth import ensure_key_auth
+from lib.remote_exec import resolve_privilege
 from lib.socks import Tun2Socks
 from lib.tun import TUNInterface
 from lib.utils import get_default_interface, internet_available, is_root
@@ -206,6 +207,16 @@ def connect_server_proxy(args, config, server, detector, quiet: bool):
 
     if not quiet:
         step_ok("SSH authentication", f"{server['user']}@{server['host']}")
+
+    priv = resolve_privilege(server, config, quiet)
+    if not quiet:
+        label = {
+            "root": "root",
+            "sudo": "sudo (passwordless)",
+            "sudo_pw": "sudo (password)",
+            "none": "no root — server auto-config may be limited",
+        }.get(priv.mode, priv.mode)
+        step_ok("Server privileges", label)
         step_ok("Starting reverse SSH tunnel", f"{server['user']}@{server['host']}")
 
     tunnel = ReverseSSHTunnel(config, server, local_host, local_port)

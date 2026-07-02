@@ -5,8 +5,8 @@ import subprocess
 from typing import Dict, List, Optional, Tuple
 
 from lib.logger import log
-from lib.server_proxy import MARKER, _ssh_base_cmd
-from lib.ssh_context import build_ssh_env, run_remote_bash
+from lib.remote_exec import run_privileged
+from lib.server_proxy import MARKER
 
 REMOTE_STATE_DIR = "/var/run/ssh-free"
 REMOTE_STATE_FILE = f"{REMOTE_STATE_DIR}/session.env"
@@ -27,8 +27,7 @@ def _run_remote_script(
     script: str,
     timeout: int = 45,
 ) -> subprocess.CompletedProcess:
-    cmd = _ssh_base_cmd(server, config) + ["bash", "-s"]
-    return run_remote_bash(cmd, script, build_ssh_env(), timeout)
+    return run_privileged(server, config, script, timeout)
 
 
 def teardown_remote_session(

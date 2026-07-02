@@ -165,7 +165,7 @@ class ReverseSSHTunnel:
             )
 
         if not self.identity_files:
-            raise RuntimeError("No SSH keys found. " + permission_denied_hint())
+            log.debug("No identity files on disk; relying on agent/other auth")
 
         cmd = self.build_command(background=background)
         if background:

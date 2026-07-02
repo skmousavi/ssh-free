@@ -53,6 +53,7 @@ from lib.server_proxy import (
 )
 from lib.session import build_session, save_session
 from lib.ssh import SSHTunnel
+from lib.ssh_auth import ensure_key_auth
 from lib.socks import Tun2Socks
 from lib.tun import TUNInterface
 from lib.utils import get_default_interface, internet_available, is_root
@@ -195,6 +196,16 @@ def connect_server_proxy(args, config, server, detector, quiet: bool):
     local_host, local_port, source = resolve_local_socks(detector)
     if not quiet:
         step_ok("Local SOCKS", f"{local_host}:{local_port} ({source})")
+
+    if not ensure_key_auth(server, config, quiet):
+        step_fail(
+            "SSH authentication",
+            "Could not establish key-based login to the server.",
+        )
+        sys.exit(1)
+
+    if not quiet:
+        step_ok("SSH authentication", f"{server['user']}@{server['host']}")
         step_ok("Starting reverse SSH tunnel", f"{server['user']}@{server['host']}")
 
     tunnel = ReverseSSHTunnel(config, server, local_host, local_port)

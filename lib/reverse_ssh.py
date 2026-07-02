@@ -110,7 +110,12 @@ class ReverseSSHTunnel:
 
     def _ssh_bin_index(self, cmd: list) -> int:
         for i, part in enumerate(cmd):
-            base = os.path.basename(str(part)).lower()
+            s = str(part)
+            # Skip env NAME=VALUE assignments (e.g. SSH_AUTH_SOCK=/run/.../ssh
+            # whose basename is "ssh" and would falsely match).
+            if "=" in s:
+                continue
+            base = os.path.basename(s).lower()
             if base in ("ssh", "ssh.exe"):
                 return i
         return 1

@@ -75,7 +75,6 @@ def wrap_ssh_command(cmd: list) -> list:
             "sudo",
             "-u",
             sudo_user,
-            "-E",
             "env",
             f"HOME={env.get('HOME', home)}",
             f"USER={sudo_user}",

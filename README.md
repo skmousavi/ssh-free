@@ -64,9 +64,14 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 Restart terminal, then:
 
 ```powershell
-ssh-free root@YOUR_SERVER
-ssh-free-stop
-doctor
+ssh-free administrator@192.168.0.9
+```
+
+**Or run immediately without install** (from project folder):
+
+```cmd
+cd Desktop\ssh-free
+ssh-free.bat administrator@192.168.0.9
 ```
 
 > **Note:** `client-tun` (route all PC traffic through server) is **Linux only**.  

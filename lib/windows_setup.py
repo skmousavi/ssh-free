@@ -261,6 +261,33 @@ def _add_user_path(directory: str) -> None:
 
         winreg.SetValueEx(key, "SSH_FREE_ROOT", 0, winreg.REG_EXPAND_SZ, str(get_install_dir()))
 
+    _broadcast_env_change()
+
+
+def _broadcast_env_change() -> None:
+    """Notify running processes (explorer) that env vars changed, so new
+    CMD windows pick up the updated PATH without a logoff."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        HWND_BROADCAST = 0xFFFF
+        WM_SETTINGCHANGE = 0x001A
+        SMTO_ABORTIFHUNG = 0x0002
+
+        result = wintypes.DWORD()
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            ctypes.c_wchar_p("Environment"),
+            SMTO_ABORTIFHUNG,
+            5000,
+            ctypes.byref(result),
+        )
+    except Exception:
+        pass
+
 
 def _copy_tree(repo_root: Path, install_dir: Path) -> None:
     exclude = {".git", "__pycache__", "launchers"}
@@ -364,10 +391,10 @@ def main() -> int:
             _ok("Installation complete!")
             print()
             print("  Close and reopen CMD, then:")
-            print("    ssh-free administrator@192.168.0.9")
+            print("    ssh-free user@your-server")
             print()
             print("  Or from repo folder now:")
-            print("    ssh-free.bat administrator@192.168.0.9")
+            print("    ssh-free.bat user@your-server")
             print()
             print("  v2rayN must be running (127.0.0.1:10808)")
             print()

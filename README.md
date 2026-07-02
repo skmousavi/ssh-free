@@ -77,13 +77,13 @@ The installer will:
 After install, **close and reopen CMD**, then:
 
 ```cmd
-ssh-free administrator@YOUR_SERVER
+ssh-free user@YOUR_SERVER
 ```
 
 **Run without full install** (from project folder — auto-installs deps each time):
 
 ```cmd
-ssh-free.bat administrator@YOUR_SERVER
+ssh-free.bat user@YOUR_SERVER
 ```
 
 > **Note:** `client-tun` (route all PC traffic through server) is **Linux only**.  

@@ -195,7 +195,8 @@ def check_optional_tools() -> None:
 def install_dependencies(py_cmd: Optional[List[str]] = None) -> List[str]:
     _ok(f"Checking Windows prerequisites (ssh-free v{VERSION})")
 
-    py_cmd = py_cmd or find_python()
+    if py_cmd is None:
+        py_cmd = [sys.executable] if sys.platform == "win32" else find_python()
     if not py_cmd:
         _fail(
             "Python 3 not found.\n"
@@ -221,22 +222,110 @@ def verify_installation(root: Path) -> None:
     if not (root / "bin" / "ssh-free").is_file():
         _fail(f"Missing {root / 'bin' / 'ssh-free'}")
 
-    py_cmd = find_python()
-    if not py_cmd:
-        _fail("Python not found after install")
-
-    code, out, err = _run(
-        py_cmd
-        + [
-            str(root / "bin" / "doctor"),
-        ],
-        timeout=60,
-        env={**os.environ, "SSH_FREE_ROOT": str(root)},
+    env = {**os.environ, "SSH_FREE_ROOT": str(root)}
+    result = subprocess.run(
+        [sys.executable, str(root / "bin" / "doctor")],
+        env=env,
+        timeout=120,
     )
-    if code != 0:
+    if result.returncode != 0:
         _warn("doctor reported issues (see above)")
     else:
         _ok("doctor: system ready")
+
+
+def get_install_dir() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return Path(base) / "ssh-free"
+
+
+def _add_user_path(directory: str) -> None:
+    import winreg
+
+    launcher = str(directory)
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER,
+        r"Environment",
+        0,
+        winreg.KEY_READ | winreg.KEY_WRITE,
+    ) as key:
+        try:
+            path, _ = winreg.QueryValueEx(key, "Path")
+        except FileNotFoundError:
+            path = ""
+
+        parts = [p for p in path.split(";") if p]
+        if launcher not in parts:
+            parts.append(launcher)
+            winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, ";".join(parts))
+
+        winreg.SetValueEx(key, "SSH_FREE_ROOT", 0, winreg.REG_EXPAND_SZ, str(get_install_dir()))
+
+
+def _copy_tree(repo_root: Path, install_dir: Path) -> None:
+    exclude = {".git", "__pycache__", "launchers"}
+    if install_dir.exists():
+        shutil.rmtree(install_dir)
+    install_dir.mkdir(parents=True, exist_ok=True)
+
+    for item in repo_root.iterdir():
+        if item.name in exclude:
+            continue
+        dest = install_dir / item.name
+        if item.is_dir():
+            shutil.copytree(item, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        else:
+            shutil.copy2(item, dest)
+
+    (install_dir / "logs").mkdir(exist_ok=True)
+    (install_dir / "runtime").mkdir(exist_ok=True)
+
+
+def _write_launchers(install_dir: Path, py_exe: str) -> Path:
+    launcher_dir = install_dir / "launchers"
+    launcher_dir.mkdir(exist_ok=True)
+    names = ("ssh-free", "ssh-free-stop", "doctor", "status", "tui")
+
+    for name in names:
+        script = install_dir / "bin" / name
+        content = (
+            "@echo off\r\n"
+            "setlocal\r\n"
+            f'set "SSH_FREE_ROOT={install_dir}"\r\n'
+            f'call "{install_dir}\\win-prereq.bat" || exit /b 1\r\n'
+            f'"{py_exe}" "{script}" %*\r\n'
+        )
+        (launcher_dir / f"{name}.cmd").write_text(content, encoding="ascii")
+
+    return launcher_dir
+
+
+def install_full(repo_root: Path) -> Path:
+    """Full install like install.sh — deps, copy files, PATH, verify."""
+    repo_root = repo_root.resolve()
+    if not (repo_root / "bin" / "ssh-free").is_file():
+        _fail(f"Invalid repo: {repo_root} (bin\\ssh-free not found)")
+
+    install_dependencies([sys.executable])
+
+    install_dir = get_install_dir()
+    _ok(f"Copying files to {install_dir}")
+    _copy_tree(repo_root, install_dir)
+
+    py_exe = sys.executable
+    launcher_dir = _write_launchers(install_dir, py_exe)
+    _ok(f"Creating launchers in {launcher_dir}")
+
+    _add_user_path(str(launcher_dir))
+    _ok(f"Added to user PATH: {launcher_dir}")
+
+    os.environ["SSH_FREE_ROOT"] = str(install_dir)
+    path = os.environ.get("Path", "")
+    if str(launcher_dir) not in path:
+        os.environ["Path"] = f"{path};{launcher_dir}" if path else str(launcher_dir)
+
+    verify_installation(install_dir)
+    return install_dir
 
 
 def main() -> int:
@@ -256,6 +345,11 @@ def main() -> int:
         metavar="ROOT",
         help="Verify install at ROOT",
     )
+    parser.add_argument(
+        "--install",
+        metavar="REPO",
+        help="Full install from repo directory",
+    )
     args = parser.parse_args()
 
     if sys.platform != "win32":
@@ -263,12 +357,30 @@ def main() -> int:
         return 0
 
     try:
+        if args.install:
+            dest = install_full(Path(args.install))
+            _ok("Installation complete!")
+            print()
+            print("  Close and reopen CMD, then:")
+            print("    ssh-free administrator@192.168.0.9")
+            print()
+            print("  Or from repo folder now:")
+            print("    ssh-free.bat administrator@192.168.0.9")
+            print()
+            print("  v2rayN must be running (127.0.0.1:10808)")
+            print()
+            return 0
+
         if args.verify:
             verify_installation(Path(args.verify))
             return 0
 
-        install_dependencies()
-        return 0
+        if args.ensure_deps or args.install_deps or len(sys.argv) == 1:
+            install_dependencies()
+            return 0
+
+        parser.print_help()
+        return 1
     except SetupError:
         return 1
     except Exception as exc:

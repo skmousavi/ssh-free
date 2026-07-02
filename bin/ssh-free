@@ -397,6 +397,16 @@ def connect(args):
         else:
             connect_client_tun(args, config, server, detector, args.quiet)
 
+    except KeyboardInterrupt:
+        if not args.quiet:
+            print()
+            step_fail("Cancelled", "interrupted by user")
+        try:
+            cleanup_remote_proxy(config, server)
+        except Exception:
+            pass
+        Cleanup(load_config()).run()
+        sys.exit(130)
     except Exception as e:
         log.error(str(e))
         if not args.quiet:
